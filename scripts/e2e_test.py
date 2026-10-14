@@ -88,13 +88,24 @@ def wait_status(key, statuses, timeout=40):
     return row(key)
 
 
-def review_url(iid):
+def review_url(iid, timeout=40):
+    """The form link from the internal note, once n8n has parked the execution at the Wait node."""
+    url = None
     for c in mock_calls(iid):
         if c["body"].get("internal"):
             m = re.search(r"\((http[^)]+/form-waiting/[^)]+)\)", c["body"]["body"])
             if m:
-                return m.group(1)
-    return None
+                url = m.group(1)
+    if not url:
+        return None
+    # The DB row says waiting_review a moment before n8n saves the execution as waiting.
+    execution_id = int(re.search(r"/form-waiting/(\d+)", url).group(1))
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if db(f"select status from execution_entity where id = {execution_id}") == [{"status": "waiting"}]:
+            return url
+        time.sleep(0.5)
+    return url
 
 
 def submit_form(url, decision, type_label, severity, comment):

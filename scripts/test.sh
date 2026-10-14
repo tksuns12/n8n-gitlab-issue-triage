@@ -12,6 +12,10 @@ scripts/setup.sh .env.test
 
 status=0
 python3 scripts/e2e_test.py || status=$?
+if [[ $status -ne 0 ]]; then
+  echo "--- n8n logs" >&2
+  docker compose --env-file .env.test logs --tail 80 n8n >&2
+fi
 if [[ "${1:-}" == "--down" ]]; then
   docker compose --env-file .env.test down -v >/dev/null 2>&1
 fi

@@ -47,11 +47,14 @@ compose run --rm -T --no-deps --entrypoint sh n8n -c \
   < workflows/issue-triage.json
 compose up -d --force-recreate n8n
 
-echo -n "waiting for n8n"
-for _ in $(seq 1 60); do
-  if curl -fsS http://localhost:5678/healthz/readiness >/dev/null 2>&1; then echo " ready"; exit 0; fi
+# n8n reports ready before it registers the workflow's webhook, so wait for the
+# webhook itself: 404 means not registered yet, 403 (no token) means it is live.
+echo -n "waiting for the webhook"
+for _ in $(seq 1 90); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:5678/webhook/gitlab/issues || true)
+  if [[ "$code" != "000" && "$code" != "404" && "$code" != "503" ]]; then echo " live ($code)"; exit 0; fi
   echo -n "."; sleep 2
 done
-echo " n8n did not become ready" >&2
+echo " webhook did not come up" >&2
 compose logs --tail 50 n8n >&2
 exit 1
