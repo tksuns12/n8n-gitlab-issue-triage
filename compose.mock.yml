@@ -1,0 +1,17 @@
+# Overlay for tests: points GitLab, the decision model and the text LLM at a local mock server.
+#   docker compose -f docker-compose.yml -f compose.mock.yml --env-file .env.test up -d
+services:
+  mock:
+    build: ./mock
+    ports:
+      - "127.0.0.1:8099:8099"
+
+  n8n:
+    depends_on:
+      mock:
+        condition: service_started
+    environment:
+      GITLAB_BASE_URL: http://mock:8099
+      DECISION_BASE_URL: http://mock:8099
+      LLM_BASE_URL: http://mock:8099/v1
+      TRIAGE_REVIEWER: reviewer

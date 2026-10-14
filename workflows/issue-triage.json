@@ -1,0 +1,1110 @@
+{
+  "id": "GitlabTriage0001",
+  "name": "GitLab 이슈 분류 (결정 모델 + 사람 검토)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gitlab/issues",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "89583e10-979a-5550-aa7f-3ee67424f502",
+      "name": "GitLab Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "ba75e358-f37e-5211-891a-31325edfc7b8",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "glHookSecret0001",
+          "name": "GitLab webhook secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2aa0cccf-280a-5cb2-bcb4-f1b9ea38c6ca",
+              "name": "auto_type_confidence",
+              "value": 0.9,
+              "type": "number"
+            },
+            {
+              "id": "c8789a0c-c15c-5088-b33a-1b3cf3231556",
+              "name": "auto_severity_confidence",
+              "value": 0.6,
+              "type": "number"
+            },
+            {
+              "id": "d4b62792-7da9-5e5d-ae03-7e778336ade6",
+              "name": "security_review_at",
+              "value": 0.35,
+              "type": "number"
+            },
+            {
+              "id": "075f1e05-102d-5cc0-9d80-08c978fa8824",
+              "name": "needs_info_at",
+              "value": 0.6,
+              "type": "number"
+            },
+            {
+              "id": "e79f7514-b19c-5502-b8fc-5d9a26b86543",
+              "name": "review_hours",
+              "value": 72,
+              "type": "number"
+            },
+            {
+              "id": "ce1642aa-593a-5cd6-b562-1f2729ef9b36",
+              "name": "gitlab_api",
+              "value": "={{ $env.GITLAB_BASE_URL }}/api/v4",
+              "type": "string"
+            },
+            {
+              "id": "4319737e-f521-5877-8e3a-ab21d9b2fb3b",
+              "name": "reviewer",
+              "value": "={{ $env.TRIAGE_REVIEWER }}",
+              "type": "string"
+            },
+            {
+              "id": "bdf02ecf-3e49-5a63-ba41-690345e0a72e",
+              "name": "decision_url",
+              "value": "={{ $env.DECISION_BASE_URL }}/v1/systemone",
+              "type": "string"
+            },
+            {
+              "id": "a28aa1f0-5295-587d-8004-a1c7b967e831",
+              "name": "decision_model",
+              "value": "={{ $env.DECISION_MODEL }}",
+              "type": "string"
+            },
+            {
+              "id": "8432bd89-8234-5afa-bbb0-87d37c3679a6",
+              "name": "llm_url",
+              "value": "={{ $env.LLM_BASE_URL }}/chat/completions",
+              "type": "string"
+            },
+            {
+              "id": "4bd847cb-f217-5644-b661-5bfdfe954b30",
+              "name": "llm_model",
+              "value": "={{ $env.LLM_MODEL }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d284bca2-81ef-53e7-9827-87fae604e03f",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull out what the rest of the workflow needs and decide whether to triage at all.\nconst hook = $('GitLab Webhook').first().json;\nconst body = hook.body ?? {};\nconst headers = hook.headers ?? {};\nconst issue = body.object_attributes ?? {};\nconst labels = (body.labels ?? []).map((l) => l.title);\n\nlet skip = null;\nif (body.object_kind !== 'issue') skip = 'not an issue event';\nelse if (!['open', 'reopen'].includes(issue.action)) skip = `action is ${issue.action}`;\nelse if (labels.some((l) => l.startsWith('type::'))) skip = 'reporter already set a type label';\n\n// GitLab keeps Idempotency-Key the same when it retries a delivery.\nconst eventKey = headers['idempotency-key']\n  ?? headers['x-gitlab-event-uuid']\n  ?? `${body.project?.id}:${issue.iid}:${issue.action}:${issue.updated_at}`;\n\nreturn [{\n  json: {\n    skip,\n    event_key: eventKey,\n    project_id: body.project?.id ?? null,\n    issue_iid: issue.iid ?? null,\n    issue_url: issue.url ?? '',\n    title: issue.title ?? '',\n    description: (issue.description ?? '').slice(0, 6000),\n  },\n}];\n"
+      },
+      "id": "58221b63-381e-567c-8e12-6d2e286129bb",
+      "name": "Normalize event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a428a033-d8ab-5545-890a-2d9e592251d3",
+              "leftValue": "={{ $json.skip }}",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "906d9561-f2fb-5402-ad8c-37f32c4b8154",
+      "name": "Triage this event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into triage.issue_triage (event_key, project_id, issue_iid, issue_url, title)\nvalues ($1, $2, $3, $4, $5)\non conflict (event_key) do nothing\nreturning id, true as claimed",
+        "options": {
+          "queryReplacement": "={{ [$json.event_key, $json.project_id, $json.issue_iid, $json.issue_url, $json.title] }}"
+        }
+      },
+      "id": "0c8622f3-e9dd-5a68-a64c-6da1d3de525a",
+      "name": "Claim event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        880,
+        280
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "triageDb00000001",
+          "name": "Triage DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b1ec9784-1458-5b14-91e6-21e2bc2549c6",
+              "leftValue": "={{ $json.claimed }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4363b1f9-8230-52ee-a785-1f46f8cd970f",
+      "name": "First delivery?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Settings').first().json.decision_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: $('Settings').first().json.decision_model,\n  state: {\n    title: $('Normalize event').first().json.title,\n    description: $('Normalize event').first().json.description,\n  },\n  questions: {\n    type: {\n      type: 'choice',\n      instructions: 'What kind of work does this GitLab issue ask for? Judge from `title` and `description`.',\n      criteria: {\n        bug: 'Something that works or is documented to work is broken: errors, crashes, wrong results, regressions.',\n        feature: 'A new capability, or a change to existing behaviour that users would notice.',\n        maintenance: 'Upkeep with no user-facing change: refactoring, dependency upgrades, tech debt, tooling, CI.',\n      },\n    },\n    severity: {\n      type: 'score',\n      instructions: 'If this is a defect, how badly does it hurt users?',\n      criteria: [\n        'Cosmetic or a minor inconvenience with an easy workaround',\n        'Some users affected, a workaround exists',\n        'A core feature is broken for many users with no good workaround',\n        'Outage, data loss, or exposure of data',\n      ],\n    },\n    security: {\n      type: 'noul',\n      instructions: 'Does this issue report a security vulnerability, or exposure of secrets or personal data?',\n    },\n    needs_info: {\n      type: 'noul',\n      instructions: 'Is information needed to act on this issue missing, such as steps to reproduce, expected versus actual behaviour, or the version?',\n    },\n  },\n}) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "1fec0d19-5623-5319-b2f2-045a96d105ad",
+      "name": "Decision model: classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "decisionKey00001",
+          "name": "Decision model API key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The decision model only proposes. The thresholds in Settings decide what runs without a person.\nconst s = $('Settings').first().json;\nconst ev = $('Normalize event').first().json;\nconst res = $input.first().json;\nconst a = res.answers ?? {};\nconst TYPES = ['bug', 'feature', 'maintenance'];\nconst fmt = (n) => Number(n).toFixed(2);\n\nconst valid = TYPES.includes(a.type?.choice)\n  && typeof a.type?.confidence === 'number'\n  && typeof a.severity?.score === 'number'\n  && typeof a.severity?.confidence === 'number'\n  && typeof a.security?.noul === 'number'\n  && typeof a.needs_info?.noul === 'number';\n\nlet route;\nlet reason;\nlet type = null;\nlet severity = null;\nlet typeProbs = '';\nif (!valid) {\n  route = 'review';\n  reason = res.error\n    ? `결정 모델 호출 실패: ${String(res.error.message ?? res.error).slice(0, 200)}`\n    : '결정 모델 응답 형식이 예상과 다름';\n} else {\n  type = a.type.choice;\n  // Score is a weighted index over levels ordered minor → outage. GitLab's severity::1 is the worst.\n  const level = Math.min(3, Math.max(0, Math.round(a.severity.score)));\n  severity = type === 'bug' ? `severity::${4 - level}` : null;\n  typeProbs = Object.entries(a.type.probabilities ?? {})\n    .sort((x, y) => y[1] - x[1])\n    .map(([k, v]) => `${k} ${fmt(v)}`)\n    .join(' · ');\n\n  const typeSure = a.type.confidence >= s.auto_type_confidence;\n  const severitySure = type !== 'bug' || a.severity.confidence >= s.auto_severity_confidence;\n  if (a.security.noul >= s.security_review_at) {\n    route = 'security';\n    reason = `보안 의심 ${fmt(a.security.noul)}`;\n  } else if (a.needs_info.noul >= s.needs_info_at) {\n    route = 'needs_info';\n    reason = `정보 부족 ${fmt(a.needs_info.noul)}`;\n  } else if (typeSure && severitySure) {\n    route = 'auto';\n    reason = `유형 확신도 ${fmt(a.type.confidence)}`;\n  } else {\n    route = 'review';\n    reason = `확신도 낮음 (유형 ${fmt(a.type.confidence)}, 심각도 ${fmt(a.severity.confidence)})`;\n  }\n}\n\nconst labels = type ? [`type::${type}`, ...(severity ? [severity] : [])] : [];\nconst labelRefs = labels.map((l) => `~\"${l}\"`).join(' ');\nconst autoNote = [\n  `🤖 자동 분류했습니다: ${labelRefs}`,\n  '',\n  `유형 확신도 ${valid ? fmt(a.type.confidence) : '-'} (${typeProbs}). 틀렸다면 라벨을 고쳐 주세요.`,\n].join('\\n');\n\nreturn [{\n  json: {\n    ...ev,\n    triage_id: $('Claim event').first().json.id,\n    route,\n    reason,\n    suggested_type: type ? `type::${type}` : '',\n    suggested_severity: severity ?? '없음',\n    suggested_labels: labels,\n    type_probs: typeProbs,\n    decision_model: res.model ?? null,\n    answers: valid ? a : null,\n    auto_note: autoNote,\n  },\n}];\n"
+      },
+      "id": "59e588dc-0751-5440-bd67-27a1fa9359ad",
+      "name": "Decide route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update triage.issue_triage\nset status = 'classified', route = $2, route_reason = $3, decision_model = $4,\n    decision_answers = $5::jsonb, suggested_labels = string_to_array(nullif($6, ''), ','),\n    classified_at = now()\nwhere id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.triage_id, $json.route, $json.reason, $json.decision_model, JSON.stringify($json.answers), $json.suggested_labels.join(',')] }}"
+        }
+      },
+      "id": "cc98a0a0-95ba-5059-aa1d-15b6e80d8c46",
+      "name": "Save classification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1760,
+        280
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "triageDb00000001",
+          "name": "Triage DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "ffd29b6c-df09-5af3-9e04-0064b5b37ef1",
+                    "leftValue": "={{ $('Decide route').first().json.route === 'auto' }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "auto"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "7fb5371d-980a-5f52-8981-c147a6513c7b",
+                    "leftValue": "={{ $('Decide route').first().json.route === 'needs_info' }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "needs_info"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "b4410beb-a637-5251-ba9b-8e573ec5d5e4",
+                    "leftValue": "={{ ['review', 'security'].includes($('Decide route').first().json.route) }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "review"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ac991528-2096-5921-b495-60d51106e68d",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1980,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Settings').first().json.gitlab_api }}/projects/{{ $('Decide route').first().json.project_id }}/issues/{{ $('Decide route').first().json.issue_iid }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ add_labels: $('Decide route').first().json.suggested_labels.join(',') }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "223776b1-0893-5927-b5ac-0d846704c861",
+      "name": "GitLab: add labels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        60
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "glApiToken000001",
+          "name": "GitLab API token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Settings').first().json.gitlab_api }}/projects/{{ $('Decide route').first().json.project_id }}/issues/{{ $('Decide route').first().json.issue_iid }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ body: $('Decide route').first().json.auto_note }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "2a96c233-ccda-50ea-a5cc-9bbc7d6e043f",
+      "name": "GitLab: auto note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        60
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "glApiToken000001",
+          "name": "GitLab API token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update triage.issue_triage\nset status = 'auto_applied', final_labels = suggested_labels, decided_at = now()\nwhere id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Decide route').first().json.triage_id] }}"
+        }
+      },
+      "id": "5457a72d-a7d9-58e8-bed9-2fb335cabeb7",
+      "name": "Mark auto-applied",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2640,
+        60
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "triageDb00000001",
+          "name": "Triage DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Settings').first().json.llm_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: $('Settings').first().json.llm_model,\n  temperature: 0.2,\n  messages: [\n    {\n      role: 'system',\n      content: 'You help triage GitLab issues. Write a short, polite comment to the reporter asking only for the information that is missing to act on the issue (for example steps to reproduce, expected and actual behaviour, version, logs). Use at most 4 bullet points. Write in the same language as the issue. Do not promise fixes, dates, or causes.',\n    },\n    {\n      role: 'user',\n      content: `Title: ${$('Decide route').first().json.title}\\n\\nDescription:\\n${$('Decide route').first().json.description || '(empty)'}`,\n    },\n  ],\n}) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "21f0cb94-1d4d-5cad-9cac-79699d4422e3",
+      "name": "LLM: draft question",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "llmApiKey0000001",
+          "name": "LLM API key (OpenAI-compatible)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the internal note that asks a person to review. The link opens the n8n form below.\nconst r = $('Decide route').first().json;\nconst s = $('Settings').first().json;\nconst drafted = $('LLM: draft question').isExecuted\n  ? $('LLM: draft question').first().json.choices?.[0]?.message?.content ?? ''\n  : '';\nconst a = r.answers;\nconst fmt = (n) => Number(n).toFixed(2);\nconst labelRefs = r.suggested_labels.map((l) => `~\"${l}\"`).join(' ') || '(제안 없음)';\nconst mention = s.reviewer ? `@${s.reviewer} ` : '';\n\nconst lines = [\n  `${mention}분류 검토를 부탁드립니다. 사유: ${r.reason}`,\n  '',\n  `- 제안 라벨: ${labelRefs}`,\n];\nif (a) {\n  lines.push(`- 유형 확률: ${r.type_probs} (확신도 ${fmt(a.type.confidence)})`);\n  lines.push(`- 보안 의심 ${fmt(a.security.noul)} · 정보 부족 ${fmt(a.needs_info.noul)}`);\n}\nif (drafted) lines.push('- 작성자에게 보낼 질문 초안이 있습니다. 폼에서 고치거나 지울 수 있습니다.');\nlines.push('', `[검토 폼 열기](${$execution.resumeFormUrl})`);\nlines.push('', `${s.review_hours}시간 안에 응답이 없으면 ~\"triage::needs-human\" 라벨만 붙입니다.`);\n\nreturn [{ json: { draft: drafted.trim(), review_note: lines.join('\\n') } }];\n"
+      },
+      "id": "fd1e8095-c2c9-5557-897e-05f2772f06b0",
+      "name": "Prepare review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Settings').first().json.gitlab_api }}/projects/{{ $('Decide route').first().json.project_id }}/issues/{{ $('Decide route').first().json.issue_iid }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ body: $json.review_note, internal: true }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "b9f294ba-a13b-5d98-819b-37aae8c9eb5f",
+      "name": "GitLab: internal review note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "glApiToken000001",
+          "name": "GitLab API token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update triage.issue_triage\nset status = 'waiting_review', draft_comment = nullif($2, '')\nwhere id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Decide route').first().json.triage_id, $('Prepare review').first().json.draft] }}"
+        }
+      },
+      "id": "8d282648-9677-5d73-9081-1ba5810addd2",
+      "name": "Mark waiting",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2860,
+        420
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "triageDb00000001",
+          "name": "Triage DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "이슈 분류 검토",
+        "formDescription": "={{ $('Decide route').first().json.title }}\n{{ $('Decide route').first().json.issue_url }}\n\n사유: {{ $('Decide route').first().json.reason }}\n유형 확률: {{ $('Decide route').first().json.type_probs || '-' }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "결정",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "적용"
+                  },
+                  {
+                    "option": "거절 (직접 분류)"
+                  }
+                ]
+              },
+              "defaultValue": "적용"
+            },
+            {
+              "fieldLabel": "유형",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "type::bug"
+                  },
+                  {
+                    "option": "type::feature"
+                  },
+                  {
+                    "option": "type::maintenance"
+                  }
+                ]
+              },
+              "defaultValue": "={{ $('Decide route').first().json.suggested_type }}"
+            },
+            {
+              "fieldLabel": "심각도",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "없음"
+                  },
+                  {
+                    "option": "severity::1"
+                  },
+                  {
+                    "option": "severity::2"
+                  },
+                  {
+                    "option": "severity::3"
+                  },
+                  {
+                    "option": "severity::4"
+                  }
+                ]
+              },
+              "defaultValue": "={{ $('Decide route').first().json.suggested_severity }}"
+            },
+            {
+              "fieldLabel": "작성자에게 남길 댓글",
+              "fieldType": "textarea",
+              "placeholder": "비워 두면 댓글을 달지 않습니다",
+              "defaultValue": "={{ $('Prepare review').first().json.draft }}"
+            }
+          ]
+        },
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": "={{ $('Settings').first().json.review_hours }}",
+        "resumeUnit": "hours",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "8f7fd51e-bb88-58ae-8979-375afb7e82eb",
+      "name": "Review form",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3080,
+        420
+      ],
+      "webhookId": "d900bc37-3651-5af4-9b4d-a418b23dc24b"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The reviewer's answer is final. A timeout or a rejection leaves the issue to a person.\nconst r = $('Decide route').first().json;\nconst f = $input.first().json;\nconst decision = f['결정'];\n\nlet status;\nlet labels;\nlet comment = '';\nif (!decision) {\n  status = 'expired';\n  labels = ['triage::needs-human'];\n} else if (decision.startsWith('거절')) {\n  status = 'rejected';\n  labels = ['triage::needs-human'];\n} else {\n  labels = [f['유형'], f['심각도']].filter((l) => l && l !== '없음');\n  comment = String(f['작성자에게 남길 댓글'] ?? '').trim();\n  const same = [...labels].sort().join() === [...r.suggested_labels].sort().join();\n  status = same ? 'approved' : 'corrected';\n}\nreturn [{ json: { status, labels, comment } }];\n"
+      },
+      "id": "341dba3e-5d96-59b7-b474-fb27b2d305c5",
+      "name": "Read decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Settings').first().json.gitlab_api }}/projects/{{ $('Decide route').first().json.project_id }}/issues/{{ $('Decide route').first().json.issue_iid }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ add_labels: $json.labels.join(',') }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "3d2c62c5-c22e-50ba-8ccf-a6107b878af7",
+      "name": "GitLab: apply decision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "glApiToken000001",
+          "name": "GitLab API token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a54fb46d-c951-558d-ac6b-2ec45c3c4124",
+              "leftValue": "={{ $('Read decision').first().json.comment }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "78343a6a-5725-557a-9d14-ee45d3806292",
+      "name": "Comment approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3740,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Settings').first().json.gitlab_api }}/projects/{{ $('Decide route').first().json.project_id }}/issues/{{ $('Decide route').first().json.issue_iid }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ body: $('Read decision').first().json.comment }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "2ffb3ae9-9632-5c36-8907-5e7bd81c7ff3",
+      "name": "GitLab: post comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3960,
+        340
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "glApiToken000001",
+          "name": "GitLab API token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update triage.issue_triage\nset status = $2, final_labels = string_to_array($3, ','), posted_comment = nullif($4, ''),\n    decided_at = now()\nwhere id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Decide route').first().json.triage_id, $('Read decision').first().json.status, $('Read decision').first().json.labels.join(','), $('Read decision').first().json.comment] }}"
+        }
+      },
+      "id": "e1e0eab1-84e5-5a92-9eb0-03964fd96bed",
+      "name": "Mark decided",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4180,
+        420
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "triageDb00000001",
+          "name": "Triage DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 1. 받기\nGitLab 이슈 Webhook을 `X-Gitlab-Token`으로 확인하고, `Idempotency-Key`로 같은 이벤트를 한 번만 처리합니다. 열림·다시 열림 이벤트만, 작성자가 `type::` 라벨을 직접 단 이슈는 건너뜁니다.",
+        "height": 120,
+        "width": 1230
+      },
+      "id": "adbd8f6c-e540-5fbc-b63f-cc78d63c79f2",
+      "name": "Note: intake",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. 분류 (결정 모델)\n결정 모델이 유형(choice)·심각도(score)·보안 의심·정보 부족(noul)을 확률로 답합니다. Jev, Mercury Decide 등 `/v1/systemone` 규격이면 주소와 모델 이름만 바꿔 교체합니다. 실패하면 사람 검토로 갑니다.",
+        "height": 130,
+        "width": 640,
+        "color": 5
+      },
+      "id": "296d1b72-6683-51f3-97d4-0b5d1cdc3dd3",
+      "name": "Note: classify",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3a. 자동 적용\n확신도가 기준 이상이고 보안·정보 부족 신호가 없을 때만 라벨을 붙이고 근거를 댓글로 남깁니다.",
+        "height": 110,
+        "width": 640,
+        "color": 4
+      },
+      "id": "51e94cba-3720-560b-9138-c80fa6f3ff31",
+      "name": "Note: auto",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        -70
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3b. 사람 검토\n정보가 부족하면 LLM이 질문 초안만 씁니다. 담당자에게 내부 메모(비공개)로 검토 폼 링크를 보내고, 담당자가 고르거나 고친 라벨과 댓글만 GitLab에 반영합니다. 결과는 `triage.review_outcomes` 뷰로 집계합니다.",
+        "height": 100,
+        "width": 2140,
+        "color": 3
+      },
+      "id": "24650f23-616c-58e7-ad94-e82fba92cc06",
+      "name": "Note: review",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        615
+      ]
+    }
+  ],
+  "connections": {
+    "GitLab Webhook": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Normalize event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize event": {
+      "main": [
+        [
+          {
+            "node": "Triage this event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Triage this event?": {
+      "main": [
+        [
+          {
+            "node": "Claim event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim event": {
+      "main": [
+        [
+          {
+            "node": "First delivery?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "First delivery?": {
+      "main": [
+        [
+          {
+            "node": "Decision model: classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision model: classify": {
+      "main": [
+        [
+          {
+            "node": "Decide route",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decide route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide route": {
+      "main": [
+        [
+          {
+            "node": "Save classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save classification": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "GitLab: add labels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LLM: draft question",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitLab: add labels": {
+      "main": [
+        [
+          {
+            "node": "GitLab: auto note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitLab: auto note": {
+      "main": [
+        [
+          {
+            "node": "Mark auto-applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM: draft question": {
+      "main": [
+        [
+          {
+            "node": "Prepare review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare review": {
+      "main": [
+        [
+          {
+            "node": "GitLab: internal review note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitLab: internal review note": {
+      "main": [
+        [
+          {
+            "node": "Mark waiting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark waiting": {
+      "main": [
+        [
+          {
+            "node": "Review form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review form": {
+      "main": [
+        [
+          {
+            "node": "Read decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read decision": {
+      "main": [
+        [
+          {
+            "node": "GitLab: apply decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitLab: apply decision": {
+      "main": [
+        [
+          {
+            "node": "Comment approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comment approved?": {
+      "main": [
+        [
+          {
+            "node": "GitLab: post comment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark decided",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitLab: post comment": {
+      "main": [
+        [
+          {
+            "node": "Mark decided",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "active": false,
+  "tags": []
+}

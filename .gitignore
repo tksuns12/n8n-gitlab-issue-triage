@@ -1,0 +1,7 @@
+.env
+.env.swp
+*.swp
+.DS_Store
+__pycache__/
+eval/.cache/
+eval/results/*.jsonl
